@@ -208,6 +208,9 @@ def run_wavelet_scnn_pipeline(epochs: int = 30, lr: float = 1e-3):
             dynamic_axes={"sensor_stream": {0: "batch_size"}, "mode_probabilities": {0: "batch_size"}}
         )
         print(f"[EXPORT] ONNX saved: {onnx_path} ({onnx_path.stat().st_size / 1024:.2f} KB)")
+        edge_onnx_path = OUTPUT_DIR / "movemint_edge_model.onnx"
+        shutil.copyfile(onnx_path, edge_onnx_path)
+        print(f"[EXPORT] Synchronized: {edge_onnx_path}")
     except Exception as e:
         print(f"[INFO] ONNX export note: {e}")
 

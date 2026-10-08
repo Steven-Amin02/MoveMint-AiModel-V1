@@ -92,17 +92,15 @@ Evaluated on the held-out test partition of **1,500 unseen sensor windows** from
 | **Baseline 1D-CNN** | Raw temporal Convolutions | 70.13% | 70.76% | 33.07% | 79.39% | 165 KB |
 | **Multi-Scale ResNet** | Parallel Receptive Fields | 72.60% | 73.21% | 29.97% | 77.75% | 1.0 MB |
 | **Random Forest (14 Feats)** | Handcrafted FFT & Jerk stats | 85.53% | 84.82% | 4.65% | 80.80% | N/A (Sklearn) |
-| **Wavelet Multi-Scale S-CNN (W-SCNN)** | **Learnable DWT + Multi-Scale SE** | **80.13%** | **80.04%** | **20.16%** | **85.01%** | **165 KB (FP32) / 327 KB (INT8)** |
+| **Hierarchical Wavelet S-CNN (H-WSCNN)** | **Learnable DWT + Multi-Scale SE + Skip Forwarding** | **81.53%** | **81.42%** | **19.90%** | **85.71%** | **1.2 MB (FP32)** |
 
 ---
 
-## 6. Production Model Architecture: Wavelet Multi-Scale S-CNN (`MoveMintWaveletSCNN`)
+## 6. Production Model Architecture: Hierarchical Wavelet S-CNN (`MoveMintWaveletSCNN`)
 
-* **Type:** Discrete Wavelet Transform (DWT) Filterbank + Multi-Scale ResNet + Squeeze-and-Excitation + Dual Pooling (GAP + GMP).
-* **Trainable Parameters:** $291{,}368$
+* **Type:** Discrete Wavelet Transform (DWT) Filterbank + Multi-Scale Blocks (k=3, 7, 15) + Squeeze-and-Excitation + Hierarchical Multi-Level Skip Forwarding (PMC7767000).
+* **Trainable Parameters:** $308{,}624$
 * **Frequency Decomposition:** Haar/Biorthogonal depthwise 1D filterbank (`stride=2`) disentangles low-frequency macro kinetics (trend) from high-frequency road & motor vibration (detail).
-* **Edge Inference Latency:** $< 3\text{ ms}$ on standard mobile ARM CPU.
+* **Edge Inference Latency:** $< 15\text{ ms}$ on standard edge CPU.
 * **TFLite Export:**
-  * Float32: [`outputs/tflite/movemint_edge_model_float32.tflite`](file:///d:/Graduation-project-26/AI-2/outputs/tflite/movemint_edge_model_float32.tflite) (165 KB)
-  * INT8: [`outputs/tflite/movemint_edge_model_int8.tflite`](file:///d:/Graduation-project-26/AI-2/outputs/tflite/movemint_edge_model_int8.tflite) (327 KB)
-  * Native Android App Asset: [`android_test_app/app/src/main/assets/movemint_edge_model_float32.tflite`](file:///d:/Graduation-project-26/AI-2/android_test_app/app/src/main/assets/movemint_edge_model_float32.tflite)
+  * Float32: [`outputs/tflite/movemint_edge_model_float32.tflite`](file:///d:/Graduation-project-26/AI-2/outputs/tflite/movemint_edge_model_float32.tflite)

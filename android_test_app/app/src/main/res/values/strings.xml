@@ -1,8 +1,0 @@
-<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <string name="app_name">MoveMint AI Test</string>
-    <string name="btn_start_burst">Start 9s Sensor Burst Test</string>
-    <string name="btn_stop_test">Stop Sensing</string>
-    <string name="switch_live_stream">Continuous Live Monitoring</string>
-    <string name="ready_to_test">Ready to test. Press button below or board transit.</string>
-</resources>

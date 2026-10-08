@@ -125,56 +125,82 @@ class WaveletMultiScaleBlock(nn.Module):
         return self.act(out + res)
 
 
+class StageSkipProjection(nn.Module):
+    """
+    Skip projection module inspired by Delli Priscoli et al. (Sensors 2020 / PMC7767000):
+    Projects multi-scale convolutional feature maps directly to a fixed-dimensional
+    representation via dual pooling (GAP + GMP) before multi-level concatenation.
+    """
+    def __init__(self, in_channels: int, out_dim: int = 40, dropout: float = 0.2):
+        super().__init__()
+        self.gap = nn.AdaptiveAvgPool1d(1)
+        self.proj = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(in_channels * 2, out_dim),
+            nn.BatchNorm1d(out_dim),
+            nn.ReLU(inplace=True),
+            nn.Dropout(dropout)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        avg_p = self.gap(x)
+        max_p = torch.amax(x, dim=2, keepdim=True)
+        pooled = torch.cat([avg_p, max_p], dim=1)
+        return self.proj(pooled)
+
+
 class MoveMintWaveletSCNN(nn.Module):
     """
-    Wavelet-Integrated Multi-Scale S-CNN (W-SCNN)
+    Hierarchical Wavelet Multi-Scale S-CNN (H-WSCNN)
     Combines:
-    1. Discrete Wavelet Transform (DWT) front-end (Low-Pass Trend + High-Pass Detail)
-    2. Multi-Scale parallel receptive fields
+    1. Discrete Wavelet Transform (DWT) front-end (Haar low-pass trend + high-pass detail)
+    2. Multi-Scale parallel receptive fields (k=3, 7, 15)
     3. Squeeze-and-Excitation channel attention
-    4. Dual pooling (GAP + GMP) to capture both steady energy and peak jerks
+    4. Hierarchical Skip Forwarding (PMC7767000 / Delli Priscoli et al.):
+       Taps low-level (Stage 1), mid-level (Stage 2), and deep (Stage 3) feature representations
+       and fuses them via parallel 40-dim skip projections into a 120-dim unified latent vector.
+    5. Dual pooling (GAP + GMP) for steady vibration and sudden jerk preservation.
     
-    Input Shape:  (Batch, 12, 450)
-    Output Shape: (Batch, 8)
+    Input Shape:  (Batch, in_channels, L)  [Default: (Batch, 12, 450)]
+    Output Shape: (Batch, num_classes)     [Default: (Batch, 8)]
     """
     def __init__(self, in_channels: int = 12, num_classes: int = 8, dropout_rate: float = 0.3):
         super().__init__()
 
         # Stage 0: Wavelet Decomposition Stem
-        self.wavelet_stem = LearnableWaveletDWT1d(in_channels=in_channels)  # (B, 12, 450) -> (B, 24, 225)
+        self.wavelet_stem = LearnableWaveletDWT1d(in_channels=in_channels)  # (B, C, L) -> (B, C*2, L/2)
         
+        stem_out_dim = in_channels * 2
         self.stem_proj = nn.Sequential(
-            nn.Conv1d(24, 64, kernel_size=3, padding=1, bias=False),
+            nn.Conv1d(stem_out_dim, 64, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm1d(64),
             nn.ReLU(inplace=True)
         )
 
-        # Stage 1: Feature learning at 64 channels
+        # Stage 1: Shallow micro-vibrations (64 channels)
         self.stage1 = nn.Sequential(
             WaveletMultiScaleBlock(64, 64, stride=1),
-            nn.MaxPool1d(kernel_size=2, stride=2)  # (64, 112)
+            nn.MaxPool1d(kernel_size=2, stride=2)
         )
+        self.skip_stage1 = StageSkipProjection(64, out_dim=40, dropout=dropout_rate * 0.7)
 
-        # Stage 2: Feature learning at 128 channels
+        # Stage 2: Mid-level sway & bump dynamics (128 channels)
         self.stage2 = nn.Sequential(
             WaveletMultiScaleBlock(64, 128, stride=1),
-            nn.MaxPool1d(kernel_size=2, stride=2)  # (128, 56)
+            nn.MaxPool1d(kernel_size=2, stride=2)
         )
+        self.skip_stage2 = StageSkipProjection(128, out_dim=40, dropout=dropout_rate * 0.7)
 
-        # Stage 3: Deep refinement at 128 channels
+        # Stage 3: Deep macro-transit kinematics (128 channels)
         self.stage3 = nn.Sequential(
             WaveletMultiScaleBlock(128, 128, stride=1),
-            nn.MaxPool1d(kernel_size=2, stride=2)  # (128, 28)
+            nn.MaxPool1d(kernel_size=2, stride=2)
         )
+        self.skip_stage3 = StageSkipProjection(128, out_dim=40, dropout=dropout_rate * 0.7)
 
-        # Global Pooling: Global Average + Global Max (torch.amax)
-        self.gap = nn.AdaptiveAvgPool1d(1)
-
-        # Dense Classifier Head
+        # Hierarchical Classifier Head: Fuses 3 x 40 = 120 dims
         self.head = nn.Sequential(
-            nn.Flatten(),
-            nn.Dropout(dropout_rate),
-            nn.Linear(128 * 2, 64),
+            nn.Linear(120, 64),
             nn.BatchNorm1d(64),
             nn.ReLU(inplace=True),
             nn.Dropout(dropout_rate * 0.5),
@@ -182,19 +208,20 @@ class MoveMintWaveletSCNN(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (B, 12, 450)
-        x = self.wavelet_stem(x)  # (B, 24, 225)
-        x = self.stem_proj(x)     # (B, 64, 225)
-        x = self.stage1(x)        # (B, 64, 112)
-        x = self.stage2(x)        # (B, 128, 56)
-        x = self.stage3(x)        # (B, 128, 28)
+        # x: (B, C, L)
+        s0 = self.stem_proj(self.wavelet_stem(x))
+        s1 = self.stage1(s0)
+        s2 = self.stage2(s1)
+        s3 = self.stage3(s2)
 
-        # Dual pooling: Average energy + Peak max
-        avg_pool = self.gap(x)                           # (B, 128, 1)
-        max_pool = torch.amax(x, dim=2, keepdim=True)    # (B, 128, 1) - clean ONNX ReduceMax
-        pooled = torch.cat([avg_pool, max_pool], dim=1)  # (B, 256, 1)
+        # Hierarchical skip projections (PMC7767000)
+        p1 = self.skip_stage1(s1)  # (B, 40)
+        p2 = self.skip_stage2(s2)  # (B, 40)
+        p3 = self.skip_stage3(s3)  # (B, 40)
 
-        logits = self.head(pooled)
+        # Fused multi-level latent representation: (B, 120)
+        fused = torch.cat([p1, p2, p3], dim=1)
+        logits = self.head(fused)
         return logits
 
     def count_parameters(self) -> int:
@@ -208,3 +235,8 @@ class MoveMintWaveletSCNN(nn.Module):
             "estimated_fp32_size_kb": round(estimated_size_kb, 2),
             "estimated_int8_size_kb": round(estimated_size_kb / 4, 2)
         }
+
+
+# Model alias for semantic clarity
+HierarchicalWaveletSCNN = MoveMintWaveletSCNN
+
